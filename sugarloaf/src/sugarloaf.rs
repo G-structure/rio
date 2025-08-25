@@ -19,6 +19,7 @@ use primitives::ImageProperties;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
+use rio_window::backdrop::{BackdropProvider, BackdropSource, PhysicalRect};
 use state::SugarState;
 
 pub struct Sugarloaf<'a> {
@@ -31,6 +32,8 @@ pub struct Sugarloaf<'a> {
     pub background_image: Option<ImageProperties>,
     pub graphics: Graphics,
     filters_brush: Option<FiltersBrush>,
+    pub backdrop_source: BackdropSource,
+    backdrop_provider: Option<Box<dyn BackdropProvider>>,
 }
 
 #[derive(Debug)]
@@ -160,6 +163,8 @@ impl Sugarloaf<'_> {
             rich_text_brush,
             graphics: Graphics::default(),
             filters_brush: None,
+            backdrop_source: BackdropSource::None,
+            backdrop_provider: None,
         };
 
         Ok(instance)
@@ -185,6 +190,16 @@ impl Sugarloaf<'_> {
         self.state.reset();
         self.state
             .set_fonts(font_library, &mut self.rich_text_brush);
+    }
+
+    #[inline]
+    pub fn set_backdrop(
+        &mut self,
+        source: BackdropSource,
+        provider: Option<Box<dyn BackdropProvider>>,
+    ) {
+        self.backdrop_source = source;
+        self.backdrop_provider = provider;
     }
 
     #[inline]
@@ -368,6 +383,21 @@ impl Sugarloaf<'_> {
             &mut self.ctx,
             &mut self.graphics,
         );
+        let backdrop_view = if self.backdrop_source != BackdropSource::None {
+            if let Some(provider) = self.backdrop_provider.as_mut() {
+                let rect = PhysicalRect::new(
+                    0,
+                    0,
+                    self.ctx.size.width as u32,
+                    self.ctx.size.height as u32,
+                );
+                provider.begin_frame(rect)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         match self.ctx.surface.get_current_texture() {
             Ok(frame) => {
@@ -456,6 +486,7 @@ impl Sugarloaf<'_> {
                         &mut encoder,
                         &frame.texture,
                         &frame.texture,
+                        backdrop_view.as_ref(),
                     );
                 }
                 self.ctx.queue.submit(Some(encoder.finish()));

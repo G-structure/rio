@@ -53,6 +53,7 @@ num-traits = "0.2.19"
 yazi = { version = "0.2.1", optional = true }
 zeno = { version = "0.3.3", optional = true }
 futures = { workspace = true }
+rio-window = { workspace = true }
 
 librashader-common = "0.8.1"
 librashader-presets = "0.8.1"
@@ -81,7 +82,6 @@ ttf-parser = { version = "0.25.1", default-features = false, features = ["openty
 fontconfig-parser = { version = "0.5.8", default-features = false }
 
 [dev-dependencies]
-rio-window = { workspace = true }
 png = "0.17.16"
 deflate = "1.0.0"
 criterion = { workspace = true }

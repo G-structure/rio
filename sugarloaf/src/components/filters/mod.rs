@@ -131,6 +131,7 @@ impl FiltersBrush {
         encoder: &mut wgpu::CommandEncoder,
         src_texture: &wgpu::Texture,
         dst_texture: &wgpu::Texture,
+        _backdrop_view: Option<&wgpu::TextureView>,
     ) {
         let filters_count = self.filter_chains.len();
         if filters_count == 0 {
