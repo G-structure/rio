@@ -305,6 +305,7 @@ pub fn default_config_file_content() -> String {
 #       For more information please check the docs.
 #
 # • filters: A list of paths to RetroArch slang shaders. Might not work with OpenGL.
+# • filters-target: Choose "frame" (default) to filter the full frame or "background" to filter only the background render target.
 #
 # Example:
 # [renderer]
@@ -313,6 +314,7 @@ pub fn default_config_file_content() -> String {
 # disable-unfocused-render = false
 # level = 1
 # filters = []
+# filters_target = "frame"
 
 # Keyboard
 #

@@ -12,6 +12,7 @@ use crate::layout::{RichTextLayout, RootStyle};
 use crate::sugarloaf::graphics::{BottomLayer, Graphics};
 use crate::sugarloaf::layer::types;
 use crate::Content;
+use crate::FiltersTarget;
 use crate::SugarDimensions;
 use crate::{context::Context, Object};
 use core::fmt::{Debug, Formatter};
@@ -31,6 +32,8 @@ pub struct Sugarloaf<'a> {
     pub background_image: Option<ImageProperties>,
     pub graphics: Graphics,
     filters_brush: Option<FiltersBrush>,
+    filters_target: FiltersTarget,
+    bg_texture: Option<wgpu::Texture>, // TODO: OS/video backdrop providers
 }
 
 #[derive(Debug)]
@@ -160,6 +163,8 @@ impl Sugarloaf<'_> {
             rich_text_brush,
             graphics: Graphics::default(),
             filters_brush: None,
+            filters_target: FiltersTarget::Frame,
+            bg_texture: None,
         };
 
         Ok(instance)
@@ -243,6 +248,12 @@ impl Sugarloaf<'_> {
                 brush.update_filters(&self.ctx, filters);
             }
         }
+    }
+
+    #[inline]
+    pub fn set_filters_target(&mut self, target: FiltersTarget) {
+        self.filters_target = target;
+        self.bg_texture = None;
     }
 
     #[inline]
@@ -336,6 +347,7 @@ impl Sugarloaf<'_> {
                 bottom_layer.data.bounds.height = self.ctx.size.height;
             }
         }
+        self.bg_texture = None;
     }
 
     #[inline]
@@ -349,6 +361,7 @@ impl Sugarloaf<'_> {
                 bottom_layer.data.bounds.height = self.ctx.size.height;
             }
         }
+        self.bg_texture = None;
     }
 
     #[inline]
@@ -375,91 +388,248 @@ impl Sugarloaf<'_> {
                     &wgpu::CommandEncoderDescriptor { label: None },
                 );
 
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                if let Some(layer) = &self.graphics.bottom_layer {
-                    self.layer_brush
-                        .prepare(&mut encoder, &mut self.ctx, &[&layer.data]);
-                }
-
-                if self.graphics.has_graphics_on_top_layer() {
-                    for request in &self.graphics.top_layer {
-                        if let Some(entry) = self.graphics.get(&request.id) {
-                            self.layer_brush.prepare_with_handle(
-                                &mut encoder,
-                                &mut self.ctx,
-                                &entry.handle,
-                                &Rectangle {
-                                    width: request.width.unwrap_or(entry.width),
-                                    height: request.height.unwrap_or(entry.height),
-                                    x: request.pos_x,
-                                    y: request.pos_y,
-                                },
-                            );
-                        }
-                    }
-                }
-
-                {
-                    let load = if let Some(background_color) = self.background_color {
-                        wgpu::LoadOp::Clear(background_color)
-                    } else {
-                        wgpu::LoadOp::Load
+                if self.filters_target == FiltersTarget::Background {
+                    // Ensure background render target
+                    let size = wgpu::Extent3d {
+                        width: self.ctx.size.width as u32,
+                        height: self.ctx.size.height as u32,
+                        depth_or_array_layers: 1,
                     };
-
-                    let mut rpass =
-                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            label: None,
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
+                    let bg_tex =
+                        self.ctx.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("bg_rt"),
+                            size,
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: self.ctx.format,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_SRC
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
                         });
+                    self.bg_texture = Some(bg_tex);
+                    let bg_tex_ref = self.bg_texture.as_ref().unwrap();
+                    let bg_view =
+                        bg_tex_ref.create_view(&wgpu::TextureViewDescriptor::default());
 
-                    if self.graphics.bottom_layer.is_some() {
-                        self.layer_brush.render(0, &mut rpass, None);
+                    if let Some(layer) = &self.graphics.bottom_layer {
+                        self.layer_brush.prepare(
+                            &mut encoder,
+                            &mut self.ctx,
+                            &[&layer.data],
+                        );
                     }
 
                     if self.graphics.has_graphics_on_top_layer() {
-                        let range_request = if self.graphics.bottom_layer.is_some() {
-                            1..(self.graphics.top_layer.len() + 1)
-                        } else {
-                            0..self.graphics.top_layer.len()
-                        };
-                        for request in range_request {
-                            self.layer_brush.render(request, &mut rpass, None);
+                        for request in &self.graphics.top_layer {
+                            if let Some(entry) = self.graphics.get(&request.id) {
+                                self.layer_brush.prepare_with_handle(
+                                    &mut encoder,
+                                    &mut self.ctx,
+                                    &entry.handle,
+                                    &Rectangle {
+                                        width: request.width.unwrap_or(entry.width),
+                                        height: request.height.unwrap_or(entry.height),
+                                        x: request.pos_x,
+                                        y: request.pos_y,
+                                    },
+                                );
+                            }
                         }
                     }
-                    self.quad_brush
-                        .render(&mut self.ctx, &self.state, &mut rpass);
-                    self.rich_text_brush.render(&mut self.ctx, &mut rpass);
-                }
 
-                if self.graphics.bottom_layer.is_some()
-                    || self.graphics.has_graphics_on_top_layer()
-                {
-                    self.layer_brush.end_frame();
-                    self.graphics.clear_top_layer();
-                }
+                    // First pass: draw background into bg_rt
+                    {
+                        let load = if let Some(background_color) = self.background_color {
+                            wgpu::LoadOp::Clear(background_color)
+                        } else {
+                            wgpu::LoadOp::Load
+                        };
 
-                if let Some(ref mut filters_brush) = self.filters_brush {
-                    filters_brush.render(
-                        &self.ctx,
-                        &mut encoder,
-                        &frame.texture,
-                        &frame.texture,
-                    );
+                        let mut rpass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                label: None,
+                                color_attachments: &[Some(
+                                    wgpu::RenderPassColorAttachment {
+                                        view: &bg_view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                    },
+                                )],
+                                depth_stencil_attachment: None,
+                            });
+
+                        if self.graphics.bottom_layer.is_some() {
+                            self.layer_brush.render(0, &mut rpass, None);
+                        }
+
+                        if self.graphics.has_graphics_on_top_layer() {
+                            let range_request = if self.graphics.bottom_layer.is_some() {
+                                1..(self.graphics.top_layer.len() + 1)
+                            } else {
+                                0..self.graphics.top_layer.len()
+                            };
+                            for request in range_request {
+                                self.layer_brush.render(request, &mut rpass, None);
+                            }
+                        }
+                        self.quad_brush
+                            .render(&mut self.ctx, &self.state, &mut rpass);
+                    }
+
+                    if self.graphics.bottom_layer.is_some()
+                        || self.graphics.has_graphics_on_top_layer()
+                    {
+                        self.layer_brush.end_frame();
+                        self.graphics.clear_top_layer();
+                    }
+
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    // Apply filters or copy
+                    if let Some(ref mut filters_brush) = self.filters_brush {
+                        filters_brush.render(
+                            &self.ctx,
+                            &mut encoder,
+                            bg_tex_ref,
+                            &frame.texture,
+                        );
+                    } else {
+                        encoder.copy_texture_to_texture(
+                            bg_tex_ref.as_image_copy(),
+                            frame.texture.as_image_copy(),
+                            size,
+                        );
+                    }
+
+                    // Second pass: draw glyphs over filtered background
+                    {
+                        let mut rpass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                label: None,
+                                color_attachments: &[Some(
+                                    wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                    },
+                                )],
+                                depth_stencil_attachment: None,
+                            });
+
+                        // TODO: split QuadBrush to avoid filtering cursor/selection
+                        self.rich_text_brush.render(&mut self.ctx, &mut rpass);
+                    }
+
+                    self.ctx.queue.submit(Some(encoder.finish()));
+                    frame.present();
+                } else {
+                    // Existing full-frame path
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    if let Some(layer) = &self.graphics.bottom_layer {
+                        self.layer_brush.prepare(
+                            &mut encoder,
+                            &mut self.ctx,
+                            &[&layer.data],
+                        );
+                    }
+
+                    if self.graphics.has_graphics_on_top_layer() {
+                        for request in &self.graphics.top_layer {
+                            if let Some(entry) = self.graphics.get(&request.id) {
+                                self.layer_brush.prepare_with_handle(
+                                    &mut encoder,
+                                    &mut self.ctx,
+                                    &entry.handle,
+                                    &Rectangle {
+                                        width: request.width.unwrap_or(entry.width),
+                                        height: request.height.unwrap_or(entry.height),
+                                        x: request.pos_x,
+                                        y: request.pos_y,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
+                    {
+                        let load = if let Some(background_color) = self.background_color {
+                            wgpu::LoadOp::Clear(background_color)
+                        } else {
+                            wgpu::LoadOp::Load
+                        };
+
+                        let mut rpass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                label: None,
+                                color_attachments: &[Some(
+                                    wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                    },
+                                )],
+                                depth_stencil_attachment: None,
+                            });
+
+                        if self.graphics.bottom_layer.is_some() {
+                            self.layer_brush.render(0, &mut rpass, None);
+                        }
+
+                        if self.graphics.has_graphics_on_top_layer() {
+                            let range_request = if self.graphics.bottom_layer.is_some() {
+                                1..(self.graphics.top_layer.len() + 1)
+                            } else {
+                                0..self.graphics.top_layer.len()
+                            };
+                            for request in range_request {
+                                self.layer_brush.render(request, &mut rpass, None);
+                            }
+                        }
+                        self.quad_brush
+                            .render(&mut self.ctx, &self.state, &mut rpass);
+                        self.rich_text_brush.render(&mut self.ctx, &mut rpass);
+                    }
+
+                    if self.graphics.bottom_layer.is_some()
+                        || self.graphics.has_graphics_on_top_layer()
+                    {
+                        self.layer_brush.end_frame();
+                        self.graphics.clear_top_layer();
+                    }
+
+                    if let Some(ref mut filters_brush) = self.filters_brush {
+                        filters_brush.render(
+                            &self.ctx,
+                            &mut encoder,
+                            &frame.texture,
+                            &frame.texture,
+                        );
+                    }
+                    self.ctx.queue.submit(Some(encoder.finish()));
+                    frame.present();
                 }
-                self.ctx.queue.submit(Some(encoder.finish()));
-                frame.present();
             }
             Err(error) => {
                 if error == wgpu::SurfaceError::OutOfMemory {

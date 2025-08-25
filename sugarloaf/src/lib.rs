@@ -25,3 +25,17 @@ pub use layout::{
     Content, FragmentStyle, FragmentStyleDecoration, SugarDimensions, UnderlineInfo,
     UnderlineShape,
 };
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum FiltersTarget {
+    Frame,
+    Background,
+}
+
+impl Default for FiltersTarget {
+    fn default() -> Self {
+        FiltersTarget::Frame
+    }
+}

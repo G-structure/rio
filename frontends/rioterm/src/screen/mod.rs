@@ -178,6 +178,7 @@ impl Screen<'_> {
         };
 
         sugarloaf.update_filters(config.renderer.filters.as_slice());
+        sugarloaf.set_filters_target(config.renderer.filters_target);
 
         let renderer = Renderer::new(config, font_library);
 
@@ -378,6 +379,8 @@ impl Screen<'_> {
 
         self.sugarloaf
             .update_filters(config.renderer.filters.as_slice());
+        self.sugarloaf
+            .set_filters_target(config.renderer.filters_target);
         self.renderer = Renderer::new(config, font_library);
 
         for context_grid in self.context_manager.contexts_mut() {
